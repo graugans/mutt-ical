@@ -98,7 +98,7 @@ def get_mutt_command(ical, email_address, accept_decline, icsfile):
 
 def execute(command, mailtext):
     process = Popen(command, stdin=PIPE)
-    process.stdin.write(mailtext)
+    process.stdin.write(mailtext.encode('utf-8'))
     process.stdin.close()
 
     result = None
