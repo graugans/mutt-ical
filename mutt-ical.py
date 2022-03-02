@@ -13,10 +13,8 @@ import tempfile, time
 import os, sys
 import warnings
 from datetime import datetime
-import subprocess
+from subprocess import Popen, PIPE
 from getopt import gnu_getopt as getopt
-
-from email.message import EmailMessage
 
 usage="""
 usage:
@@ -75,8 +73,31 @@ def get_answer(invitation):
             tzinfo = invitation.vevent.dtstamp.value.tzinfo)
     return ans
 
+def write_to_tempfile(ical):
+    tempdir = tempfile.mkdtemp()
+    icsfile = tempdir+"/event-reply.ics"
+    with open(icsfile,"w") as f:
+        f.write(ical.serialize())
+    return icsfile, tempdir
+
+def get_mutt_command(ical, email_address, accept_decline, icsfile):
+    accept_decline = accept_decline.capitalize()
+    if 'organizer' in ical.vevent.contents:
+        if hasattr(ical.vevent.organizer,'EMAIL_param'):
+            sender = ical.vevent.organizer.EMAIL_param
+        else:
+            sender = ical.vevent.organizer.value.split(':')[1] #workaround for MS
+    else:
+        sender = "NO SENDER"
+    summary = ical.vevent.contents['summary'][0].value
+    command = ["mutt", "-a", icsfile,
+            "-s", "'%s: %s'" % (accept_decline, summary), "--", sender]
+    #Uncomment the below line, and move it above the -s line to enable the wrapper
+            #"-e", 'set sendmail=\'ical_reply_sendmail_wrapper.sh\'',
+    return command
+
 def execute(command, mailtext):
-    process = subprocess.Popen(command, stdin=subprocess.PIPE)
+    process = Popen(command, stdin=PIPE)
     process.stdin.write(mailtext)
     process.stdin.close()
 
@@ -140,19 +161,6 @@ def display(ical):
     sys.stdout.write("\n")
     sys.stdout.write(description + "\n")
 
-def sendmail():
-    mutt_setting = subprocess.check_output(["mutt", "-Q", "sendmail"])
-    return mutt_setting.strip().decode().split("=")[1].replace('"', '').split()
-
-def organizer(ical):
-    if 'organizer' in ical.vevent.contents:
-        if hasattr(ical.vevent.organizer,'EMAIL_param'):
-            return ical.vevent.organizer.EMAIL_param
-        else:
-            return ical.vevent.organizer.value.split(':')[1] #workaround for MS
-    else:
-        raise("no organizer in event")
-
 if __name__=="__main__":
     email_address = None
     accept_decline = 'ACCEPTED'
@@ -202,19 +210,11 @@ if __name__=="__main__":
         sys.stderr.write("Seems like you have not been invited to this event!\n")
         sys.exit(1)
 
-    summary = ans.vevent.contents['summary'][0].value
-    accept_decline = accept_decline.capitalize()
-    subject = "'%s: %s'" % (accept_decline, summary)
-    to = organizer(ans)
+    icsfile, tempdir = write_to_tempfile(ans)
 
-    message = EmailMessage()
-    message['From'] = email_address
-    message['To'] = to
-    message['Subject'] = subject
+    mutt_command = get_mutt_command(ans, email_address, accept_decline, icsfile)
     mailtext = "'%s has %s'" % (email_address, accept_decline.lower())
-    message.add_alternative(mailtext, subtype='plain')
-    message.add_alternative(ans.serialize(),
-            subtype='calendar',
-            params={ 'method': 'REPLY' })
+    execute(mutt_command, mailtext)
 
-    execute(sendmail() + ['--', to], message.as_bytes())
+    os.remove(icsfile)
+    os.rmdir(tempdir)
